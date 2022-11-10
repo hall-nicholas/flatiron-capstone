@@ -132,3 +132,5 @@ dmypy.json
 
 data/
 secret/
+created_data/
+.idea/
