@@ -1,5 +1,7 @@
 import cv2
 import numpy as np
+from shapely.geometry import Point
+from shapely.geometry.polygon import Polygon
 
 ### IMAGES
 def display_image(img, window_name='default'):
@@ -40,23 +42,45 @@ def inverse_blacks(img): # not used
     return output
 
 def shift_array(lst, displace=1, direction='right'):
-    match direction:
-        case 'left':
-            return np.append(lst[displace:], lst[:displace], axis=0)
-        case 'right':
-            return np.append(lst[-displace:], lst[:-displace], axis=0)
-        case _:
-            raise ValueError('Inappropriate direction argument')
+    if direction == 'left':
+        return np.append(lst[displace:], lst[:displace], axis=0)
+    elif direction == 'right':
+        return np.append(lst[-displace:], lst[:-displace], axis=0)
+    else:
+        raise ValueError('Inappropriate direction argument')
 
-def apply_rolling_shutter(masked_img, ann, interval=5, strategy='right'):
-    masked_output = np.copy(masked_img)
-
-    ymin = int(np.round(ann['bbox'][1]))
-    ymax = int(np.round(ann['bbox'][1] + ann['bbox'][3]))
-
-    for row in np.arange(ymin, ymax):
-        masked_output[row] = shift_array(masked_output[row], int(row / interval), direction=strategy)
-    
+def apply_rolling_shutter(masked_img, ann, strategy='right', intensity=.6, cutoff=.6):
+    if strategy not in ['left', 'right']:
+        raise ValueError(f'Strategy {strategy} is invalid')
+    masked_output = np.zeros_like(masked_img)
+    xmin, ymin, width, height = get_ann_dims(ann)
+    poly = Polygon(coco_to_shapely(ann))
+    if strategy == 'right': 
+        cutoff_xidx = int(((width - xmin) * cutoff) + xmin)
+        for row in range(ymin, ymin + height + 1):
+            for col in range(xmin, xmin + width + 1):
+                if poly.contains(Point(row, col)):
+                    if col < cutoff_xidx:
+                        curr_intens = int(np.power(cutoff_xidx - col, intensity))
+                        if col + curr_intens < masked_img.shape[1]:
+                            masked_output[row, col + curr_intens] = masked_img[row, col]
+                        else:
+                            masked_output[row, col] = masked_img[row, col]
+                    else:
+                        masked_output[row, col] = masked_img[row, col]
+    else:
+        cutoff_xidx = int(((width - xmin) * (1 - cutoff)) + xmin)
+        for row in range(ymin, ymin + height + 1):
+            for col in range(xmin + height, xmin - 1, -1):
+                if poly.contains(Point(row, col)):
+                    if col > cutoff_xidx:
+                        curr_intens = int(np.power(col - cutoff_xidx, intensity))
+                        if col - curr_intens >= 0:
+                            masked_output[row, col - curr_intens] = masked_img[row, col]
+                        else:
+                            masked_output[row, col] = masked_img[row, col]
+                    else:
+                        masked_output[row, col] = masked_img[row, col]
     return masked_output
 
 def get_ann_dims(ann):
@@ -124,7 +148,25 @@ def coco_polyseg_formatted(ann):
         arr.append([temp[2 * i], temp[2 * i + 1]])
     return np.array(arr).astype(np.int32)
 
+def coco_to_shapely(ann):
+    arr = []
+    temp = ann['segmentation'][0]
+    for i in range(int(len(temp) / 2)):
+        arr.append([temp[2 * i + 1], temp[2 * i]])
+    return np.array(arr).astype(np.int32)
+
 ### OLD/DEPRECATED
+
+""" def apply_rolling_shutter(masked_img, ann, interval=5, strategy='right'): # v1
+    masked_output = np.copy(masked_img)
+
+    ymin = int(np.round(ann['bbox'][1]))
+    ymax = int(np.round(ann['bbox'][1] + ann['bbox'][3]))
+
+    for row in np.arange(ymin, ymax):
+        masked_output[row] = shift_array(masked_output[row], int(row / interval), direction=strategy)
+    
+    return masked_output """
 
 """ def fill_inv_masked(inv_masked_img, ann):
     output = np.copy(inv_masked_img)
